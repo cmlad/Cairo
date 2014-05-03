@@ -37,6 +37,7 @@
 #define BET_XLIB    5
 #define BET_W32     6
 #define BET_QUARTZ  7
+#define BET_SVGCAPTURE  8
 #define BET_USER   64
 
 typedef struct st_Rcairo_backend_def {

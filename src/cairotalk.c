@@ -6,6 +6,7 @@
 #include "img-backend.h"
 #include "pdf-backend.h"
 #include "svg-backend.h"
+#include "svgcapture-backend.h"
 #include "ps-backend.h"
 #include "xlib-backend.h"
 #include "w32-backend.h"
@@ -312,10 +313,10 @@ static void CairoGD_Activate(NewDevDesc *dd)
 
 static SEXP CairoGD_Cap(NewDevDesc *dd)
 {
-	SEXP raster = R_NilValue, dim;	
+	SEXP capture = R_NilValue, dim;	
 	CairoGDDesc *xd = (CairoGDDesc *) dd->deviceSpecific;
 	cairo_surface_t *s;
-	if(!xd || !xd->cb || !(s = xd->cb->cs)) return raster;
+	if(!xd || !xd->cb || !(s = xd->cb->cs)) return capture;
 
 	cairo_surface_flush(s);
 	/* we have defined way of getting the contents only from image back-ends */
@@ -328,10 +329,10 @@ static SEXP CairoGD_Cap(NewDevDesc *dd)
 		
 		/* we only support RGB or ARGB */
 		if (fmt != CAIRO_FORMAT_RGB24 && fmt != CAIRO_FORMAT_ARGB32)
-			return raster;
+			return capture;
 		
-		raster = PROTECT(allocVector(INTSXP, size));
-		dst = (unsigned int*) INTEGER(raster);
+		capture = PROTECT(allocVector(INTSXP, size));
+		dst = (unsigned int*) INTEGER(capture);
 
 		Rprintf("format = %s (%d x %d)\n", (fmt == CAIRO_FORMAT_ARGB32) ? "ARGB" : "RGB", w, h);
 
@@ -351,11 +352,28 @@ static SEXP CairoGD_Cap(NewDevDesc *dd)
 		dim = allocVector(INTSXP, 2);
 		INTEGER(dim)[0] = h;
 		INTEGER(dim)[1] = w;
-		setAttrib(raster, R_DimSymbol, dim);
+		setAttrib(capture, R_DimSymbol, dim);
 		
 		UNPROTECT(1);
 	}
-	return raster;
+	else if (cairo_surface_get_type(s) == CAIRO_SURFACE_TYPE_RECORDING) {
+		double w = xd->cb->width;
+		double h = xd->cb->height;
+
+		cairo_surface_t *news = cairo_svg_surface_create_for_stream(svgcapture_capture, NULL, w, h);
+		cairo_t *newcr = cairo_create(news);
+		cairo_set_source_surface (newcr, s, 0.0, 0.0);
+		cairo_paint (newcr);
+		cairo_surface_destroy(news);
+		cairo_destroy (newcr);
+
+		if (svg_output) {
+			capture = mkString(svg_output);
+			free(svg_output);
+			svg_output = NULL;
+		}
+	}
+	return capture;
 }
 
 static void CairoGD_Circle(double x, double y, double r,  R_GE_gcontext *gc,  NewDevDesc *dd)
@@ -414,8 +432,9 @@ static void CairoGD_Close(NewDevDesc *dd)
   if (xd->cb->onSave && xd->cb->onSave != R_NilValue) {
 	  SEXP devNr = PROTECT(ScalarInteger(ndevNumber(dd) + 1));
 	  SEXP pageNr = PROTECT(ScalarInteger(xd->npages));
-	  eval(lang3(xd->cb->onSave, devNr, pageNr), R_GlobalEnv);
-	  UNPROTECT(2);
+	  SEXP svgOutput = CairoGD_Cap(dd);
+	  eval(lang4(xd->cb->onSave, devNr, pageNr, svgOutput), R_GlobalEnv);
+	  UNPROTECT(3);
 	  R_ReleaseObject(xd->cb->onSave);
 	  xd->cb->onSave = 0;
   }
@@ -554,8 +573,9 @@ static void CairoGD_NewPage(R_GE_gcontext *gc, NewDevDesc *dd)
 		if (xd->cb->onSave) {
 			SEXP devNr = PROTECT(ScalarInteger(ndevNumber(dd) + 1));
 			SEXP pageNr = PROTECT(ScalarInteger(xd->npages));
-			eval(lang3(xd->cb->onSave, devNr, pageNr), R_GlobalEnv);
-			UNPROTECT(2);
+			SEXP svgOutput = CairoGD_Cap(dd);
+			eval(lang4(xd->cb->onSave, devNr, pageNr, svgOutput), R_GlobalEnv);
+			UNPROTECT(3);
 		}
 	}
 
@@ -653,11 +673,14 @@ Rboolean CairoGD_Open(NewDevDesc *dd, CairoGDDesc *xd,  const char *type, int co
 		xd->cb->width = w; xd->cb->height = h;
 		xd->cb = Rcairo_new_image_backend(xd->cb, conn, file, type, (int)(w+0.5), (int)(h+0.5), quality, alpha_plane);
 	}
-	else if (!strcmp(type,"pdf") || !strcmp(type,"ps") || !strcmp(type,"postscript") || !strcmp(type,"svg")) {
+	else if (!strcmp(type,"pdf") || !strcmp(type,"ps") || !strcmp(type,"postscript") || !strcmp(type,"svg") || !strcmp(type,"svgcapture")) {
 #if R_GE_version >= 9
-		/* no locator, no capture */
+		/* no locator */
 		dd->haveLocator = 1;
-		dd->haveCapture = 1;
+		/* no capture, except svgcapture */
+		if (strcmp(type,"svgcapture")) {
+			dd->haveCapture = 1;
+		}
 #endif
 		/* devices using native units, covert those to points */
 		if (umpl<0) {
@@ -678,6 +701,8 @@ Rboolean CairoGD_Open(NewDevDesc *dd, CairoGDDesc *xd,  const char *type, int co
 			xd->cb = Rcairo_new_ps_backend(xd->cb, conn, file, w, h);
 		else if (!strcmp(type,"svg"))
 			xd->cb = Rcairo_new_svg_backend(xd->cb, conn, file, w, h);
+		else if (!strcmp(type,"svgcapture"))
+			xd->cb = Rcairo_new_svgcapture_backend(xd->cb, conn, file, w, h);
 	} else {
 		/* following devices are pixel-based yet supporting umpl */
 		if (umpl>0 && xd->dpix>0) { /* convert if we can */
@@ -1121,6 +1146,7 @@ void Rcairo_register_builtin_backends() {
 	if (RcairoBackendDef_svg) Rcairo_register_backend(RcairoBackendDef_svg);
 	if (RcairoBackendDef_xlib) Rcairo_register_backend(RcairoBackendDef_xlib);
 	if (RcairoBackendDef_w32) Rcairo_register_backend(RcairoBackendDef_w32);
+	if (RcairoBackendDef_svgcapture) Rcairo_register_backend(RcairoBackendDef_svgcapture);
 }
 
 /* called on load */
@@ -1140,7 +1166,13 @@ SEXP Rcairo_capture(SEXP dev) {
 			SEXP res = CairoGD_Cap(dd);
 			if (res != R_NilValue) {
 				PROTECT(res);
-				setAttrib(res, R_ClassSymbol, mkString("nativeRaster"));
+				CairoGDDesc *xd = (CairoGDDesc *) dd->deviceSpecific;
+				if(xd && xd->cb && xd->cb->backend_type == BET_SVGCAPTURE) {
+					setAttrib(res, R_ClassSymbol, mkString("svg"));
+				}
+				else {
+					setAttrib(res, R_ClassSymbol, mkString("nativeRaster"));
+				}
 				UNPROTECT(1);
 				return res;
 			}
