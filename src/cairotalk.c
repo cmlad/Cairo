@@ -432,9 +432,8 @@ static void CairoGD_Close(NewDevDesc *dd)
   if (xd->cb->onSave && xd->cb->onSave != R_NilValue) {
 	  SEXP devNr = PROTECT(ScalarInteger(ndevNumber(dd) + 1));
 	  SEXP pageNr = PROTECT(ScalarInteger(xd->npages));
-	  SEXP svgOutput = CairoGD_Cap(dd);
-	  eval(lang4(xd->cb->onSave, devNr, pageNr, svgOutput), R_GlobalEnv);
-	  UNPROTECT(3);
+	  eval(lang3(xd->cb->onSave, devNr, pageNr), R_GlobalEnv);
+	  UNPROTECT(2);
 	  R_ReleaseObject(xd->cb->onSave);
 	  xd->cb->onSave = 0;
   }
@@ -573,9 +572,8 @@ static void CairoGD_NewPage(R_GE_gcontext *gc, NewDevDesc *dd)
 		if (xd->cb->onSave) {
 			SEXP devNr = PROTECT(ScalarInteger(ndevNumber(dd) + 1));
 			SEXP pageNr = PROTECT(ScalarInteger(xd->npages));
-			SEXP svgOutput = CairoGD_Cap(dd);
-			eval(lang4(xd->cb->onSave, devNr, pageNr, svgOutput), R_GlobalEnv);
-			UNPROTECT(3);
+			eval(lang3(xd->cb->onSave, devNr, pageNr), R_GlobalEnv);
+			UNPROTECT(2);
 		}
 	}
 
