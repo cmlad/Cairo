@@ -356,23 +356,11 @@ static SEXP CairoGD_Cap(NewDevDesc *dd)
 		
 		UNPROTECT(1);
 	}
+#if CAIRO_HAS_SVG_SURFACE
 	else if (cairo_surface_get_type(s) == CAIRO_SURFACE_TYPE_RECORDING) {
-		double w = xd->cb->width;
-		double h = xd->cb->height;
-
-		cairo_surface_t *news = cairo_svg_surface_create_for_stream(svgcapture_capture, NULL, w, h);
-		cairo_t *newcr = cairo_create(news);
-		cairo_set_source_surface (newcr, s, 0.0, 0.0);
-		cairo_paint (newcr);
-		cairo_surface_destroy(news);
-		cairo_destroy (newcr);
-
-		if (svg_output) {
-			capture = mkString(svg_output);
-			free(svg_output);
-			svg_output = NULL;
-		}
+		capture = svg_capture_capture_to_svg(xd->cb);
 	}
+#endif
 	return capture;
 }
 
@@ -586,18 +574,22 @@ static void CairoGD_NewPage(R_GE_gcontext *gc, NewDevDesc *dd)
 		   leave the operator alone. Make sure the back-end sets
 		   an operator that is optimal for the back-end */
 		Rcairo_set_color(cc, xd->bg);
-		if (xd->cb->flags & CDF_OPAQUE) {
-			/* Opaque devices use canvas if bg is transparent */
-			if (R_TRANSPARENT(xd->bg))
-				Rcairo_set_color(cc, xd->canvas);
+		if (xd->cb->backend_type == BET_SVGCAPTURE) {
+			svg_capture_reset_surface(xd->cb);
 		} else {
-			if (xd->cb->flags & CDF_FAKE_BG) {
+			if (xd->cb->flags & CDF_OPAQUE) {
+				/* Opaque devices use canvas if bg is transparent */
 				if (R_TRANSPARENT(xd->bg))
-					Rcairo_set_color(cc, fake_bg_color);
+					Rcairo_set_color(cc, xd->canvas);
+			} else {
+				if (xd->cb->flags & CDF_FAKE_BG) {
+					if (R_TRANSPARENT(xd->bg))
+						Rcairo_set_color(cc, fake_bg_color);
+				}
 			}
+			cairo_new_path(cc);
+			cairo_paint(cc);
 		}
-		cairo_new_path(cc);
-		cairo_paint(cc);
 		xd->cb->serial++;
 	}
 }
@@ -692,7 +684,10 @@ Rboolean CairoGD_Open(NewDevDesc *dd, CairoGDDesc *xd,  const char *type, int co
 		w = w * umpl * 72; /* inches * 72 = pt */
 		h = h * umpl * 72;
 		xd->cb->width = w; xd->cb->height = h;
-		xd->cb->flags|=CDF_NOZERO;
+		// Don't zero surface, unless it's svgcapture
+		if (strcmp(type,"svgcapture")) {
+			xd->cb->flags|=CDF_NOZERO;
+		}
 		if (!strcmp(type,"pdf"))
 			xd->cb = Rcairo_new_pdf_backend(xd->cb, conn, file, w, h);
 		else if (!strcmp(type,"ps") || !strcmp(type,"postscript"))
