@@ -79,14 +79,18 @@ void svg_capture_clear_output(SVGOutputBuffer *svg_output_buffer) {
 }
 
 SEXP svg_capture_capture_to_svg(Rcairo_backend *be) {
+	SEXP result = PROTECT(allocVector(VECSXP, 2));
+
 	SVGOutputBuffer *svg_output_buffer;
 	svg_output_buffer = (SVGOutputBuffer *) be->backendSpecific;
 
+	// Clear the SVG buffer
 	svg_capture_clear_output(svg_output_buffer);
-
+	
 	double w = be->width;
 	double h = be->height;
 
+	// SVG output
 	cairo_surface_t *news = cairo_svg_surface_create_for_stream(svgcapture_capture_svg_output, be, w, h);
 	cairo_t *newcr = cairo_create(news);
 	cairo_set_source_surface (newcr, be->cs, 0.0, 0.0);
@@ -94,68 +98,44 @@ SEXP svg_capture_capture_to_svg(Rcairo_backend *be) {
 	cairo_surface_destroy(news);
 	cairo_destroy (newcr);
 
+	// Fill SVG result
 	if (!svg_output_buffer->svg_full) {
-		SEXP output = mkString(svg_output_buffer->svg_buffer);
-		
-		return output;
+		// Buffer is not full -> set the SVG data in the result
+		SET_VECTOR_ELT(result, 0, mkString(svg_output_buffer->svg_buffer));
 	}
 	else {
-		// Reset full status
+		// Buffer is full (SVG is too large) -> set null int he result and reset full status
+		SET_VECTOR_ELT(result, 0, R_NilValue);
 		svg_output_buffer->svg_full = 0;
-
-		// Print to a PNG surface
-		cairo_surface_t *news = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
-		cairo_t *newcr = cairo_create(news);
-		cairo_set_source_surface (newcr, be->cs, 0.0, 0.0);
-		cairo_paint (newcr);
-
-		cairo_surface_write_to_png_stream(news, svgcapture_capture_png_output, svg_output_buffer);
-		int len = svg_output_buffer->png_buffer_size;
-
-		SEXP output = PROTECT(allocVector(RAWSXP, len));
-		unsigned char *output_data = RAW(output);
-		
-		// Copy data to the R object
-		memcpy(output_data, svg_output_buffer->png_buffer, len);
-
-		// Free the PNG buffer
-		svg_output_buffer->png_buffer_size = 0;
-		free(svg_output_buffer->png_buffer);
-		svg_output_buffer->png_buffer = NULL;
-
-		cairo_surface_destroy(news);
-		cairo_destroy (newcr);
-
-		printf("DONEEEE");
-		UNPROTECT(1);
-		return output;
-
-
-
-		// Create a new surface with a graphical error
-		/*svg_capture_reset_surface(be);
-		cairo_t *cc = be->cc;
-		cairo_set_source_rgba(cc, 0.8, 0.8, 0.8, 1);
-		cairo_rectangle(cc, 0, 0, w, h);
-		cairo_fill(cc);
-
-		cairo_set_source_rgba(cc, 0, 0, 0, 1);
-		cairo_set_font_size(cc, 16);
-		cairo_move_to(cc, 20, 35);
-		cairo_show_text(cc, "This graphic contains too many elements");
-		cairo_move_to(cc, 20, 56);
-		cairo_show_text(cc, "to be handled by StatAce.");
-
-		cairo_set_font_size(cc, 13);
-		cairo_move_to(cc, 20, 85);
-		cairo_show_text(cc, "Please regenerate and save to an image with png(),");
-		cairo_move_to(cc, 20, 103);
-		cairo_show_text(cc, "jpeg(), bmp(), tiff() or the Cairo package.");*/
-
-		
-
-		//return mkString("Test"); //svg_capture_capture_to_svg(be);
 	}
+	
+	// PNG output
+	news = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+	newcr = cairo_create(news);
+	cairo_set_source_surface (newcr, be->cs, 0.0, 0.0);
+	cairo_paint (newcr);
+	cairo_surface_write_to_png_stream(news, svgcapture_capture_png_output, svg_output_buffer);
+	cairo_surface_destroy(news);
+	cairo_destroy (newcr);
+
+	// Get the length of the png buffer, allocate a RAW vector of that size, and get the address of the data within it
+	int len = svg_output_buffer->png_buffer_size;
+	SEXP png_output = PROTECT(allocVector(RAWSXP, len));
+	unsigned char *png_output_data = RAW(png_output);
+	
+	// Copy the PNG data to the R object
+	memcpy(png_output_data, svg_output_buffer->png_buffer, len);
+
+	// Free the PNG buffer
+	svg_output_buffer->png_buffer_size = 0;
+	free(svg_output_buffer->png_buffer);
+	svg_output_buffer->png_buffer = NULL;
+
+	// Set the PNG data in the result
+	SET_VECTOR_ELT(result, 1, png_output);
+	
+	UNPROTECT(2);
+	return result;
 }
 
 int svg_capture_realloc_output_buffer_if_needed(SVGOutputBuffer *svg_output_buffer, unsigned int new_output_length) {

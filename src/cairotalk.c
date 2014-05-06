@@ -1161,7 +1161,7 @@ SEXP Rcairo_capture(SEXP dev) {
 				PROTECT(res);
 				CairoGDDesc *xd = (CairoGDDesc *) dd->deviceSpecific;
 				if(xd && xd->cb && xd->cb->backend_type == BET_SVGCAPTURE) {
-					setAttrib(res, R_ClassSymbol, mkString("svg"));
+					setAttrib(res, R_ClassSymbol, mkString("svgpng"));
 				}
 				else {
 					setAttrib(res, R_ClassSymbol, mkString("nativeRaster"));
